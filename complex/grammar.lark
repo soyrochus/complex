@@ -15,7 +15,10 @@ statement: entity_def
          | connect_rel
          | update_stmt
          | delete_stmt
+         | match_delete_stmt
          | query_stmt
+
+match_delete_stmt: "MATCH" pattern where_clause? "DELETE" alias_or_id ";"
 
 // Schema definitions
 entity_def: "ENTITY" CNAME extends_clause? "{" field_list "}" extends_clause? ";"
@@ -65,9 +68,9 @@ node_pat: node_alias? CNAME node_condition?
 node_alias: alias ":"
 node_condition: "{" condition "}"
 edge_pat: "-" edge_spec direction
-edge_spec: "[" (edge_alias_type | edge_type)? edge_condition? "]"
-edge_alias_type: CNAME ":" CNAME
-edge_type: ":" CNAME
+edge_spec: "[" (edge_alias_type | edge_type | edge_condition)? "]"
+edge_alias_type: CNAME ":" CNAME?
+edge_type: ":" CNAME?
 edge_condition: "{" condition "}"
 direction: "->" | "<-" | "-"
 return_list: return_item ("," return_item)*

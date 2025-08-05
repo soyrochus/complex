@@ -23,7 +23,7 @@ except ImportError:
 from .errors import ParseError
 from .models import (
     Program, Statement, EntityDef, RelationshipDef, InsertEntity, ConnectRel,
-    UpdateStmt, DeleteStmt, QueryStmt, DataType, FieldDecl, Multiplicity,
+    UpdateStmt, DeleteStmt, MatchDeleteStmt, QueryStmt, DataType, FieldDecl, Multiplicity,
     Assignment, Literal, Condition, PropertyCondition, TargetRef,
     NodePattern, EdgePattern, Pattern, ReturnItem
 )
@@ -43,8 +43,20 @@ class ComplexTransformer(Transformer):
     def entity_def(self, items: List[Any]) -> EntityDef:
         """Transform entity definition."""
         name = str(items[0])
-        fields = items[1]
-        extends = str(items[2]) if len(items) > 2 and items[2] is not None else None
+        
+        # Find the field list (it's a list of FieldDecl objects)
+        fields = None
+        extends = None
+        
+        for item in items[1:]:
+            if isinstance(item, list) and (not item or isinstance(item[0], FieldDecl)):
+                fields = item
+            elif isinstance(item, str):
+                extends = item
+        
+        if fields is None:
+            fields = []
+            
         return EntityDef(name=name, fields=fields, extends=extends)
     
     def field_list(self, fields: List[FieldDecl]) -> List[FieldDecl]:
@@ -276,7 +288,8 @@ class ComplexTransformer(Transformer):
     def prop_eq(self, items: List[Any]) -> PropertyCondition:
         """Transform property equality."""
         prop = str(items[0])
-        value = items[1]
+        # items[1] is the comparison operator, items[2] is the value
+        value = items[2]
         return PropertyCondition(property=prop, value=value)
     
     def query_stmt(self, items: List[Any]) -> QueryStmt:
@@ -414,7 +427,9 @@ class ComplexTransformer(Transformer):
 
     def edge_alias_type(self, items: List[Any]) -> Dict[str, str]:
         """Transform edge alias and type."""
-        return {"alias": str(items[0]), "type": str(items[1])}
+        alias = str(items[0]) if items else ""
+        edge_type = str(items[1]) if len(items) > 1 and items[1] else ""
+        return {"alias": alias, "type": edge_type}
 
     def edge_spec(self, items: List[Any]) -> Dict[str, Any]:
         """Transform edge specification."""
@@ -433,6 +448,21 @@ class ComplexTransformer(Transformer):
                 result["condition"] = item
         
         return result
+
+    def match_delete_stmt(self, items: List[Any]) -> MatchDeleteStmt:
+        """Transform MATCH ... DELETE statement."""
+        pattern = items[0]
+        where_clause = None
+        target = ""  # default target
+        
+        # Find where clause and target in the remaining items
+        for item in items[1:]:
+            if isinstance(item, Condition):
+                where_clause = item
+            elif isinstance(item, (str, int)):
+                target = item
+        
+        return MatchDeleteStmt(pattern=pattern, where_clause=where_clause, target=target)
 
 
 class ComplexParser:

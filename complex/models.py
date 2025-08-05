@@ -100,6 +100,13 @@ class DeleteStmt(BaseModel):
     target: TargetRef
 
 
+class MatchDeleteStmt(BaseModel):
+    """Represents a MATCH ... DELETE statement."""
+    pattern: "Pattern"
+    where_clause: Optional["Condition"] = None
+    target: Union[str, int]  # alias_or_id
+
+
 class NodePattern(BaseModel):
     """Represents a node pattern in MATCH."""
     alias: Optional[str] = None
@@ -141,6 +148,7 @@ Statement = Union[
     ConnectRel,
     UpdateStmt,
     DeleteStmt,
+    MatchDeleteStmt,
     QueryStmt,
 ]
 
