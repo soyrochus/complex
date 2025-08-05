@@ -1,0 +1,69 @@
+%import common.CNAME
+%import common.ESCAPED_STRING -> STRING
+%import common.SIGNED_NUMBER
+%import common.WS
+%ignore WS
+
+start: statement+
+
+statement: entity_def
+         | relationship_def
+         | insert_entity
+         | connect_rel
+         | update_stmt
+         | delete_stmt
+         | query_stmt
+
+// Schema definitions
+entity_def: "ENTITY" CNAME "{" field_list "}" extends_clause? ";"
+extends_clause: "EXTENDS" CNAME
+field_list: field_decl ("," field_decl)*
+field_decl: CNAME ":" data_type
+data_type: primitive_type | CNAME | array_ref
+array_ref: CNAME "[]"
+primitive_type: "STRING" | "INT" | "FLOAT" | "BOOL" | "DATE" | "DATETIME" | "BLOB" | "UUID" | "JSON"
+
+relationship_def: "RELATIONSHIP" CNAME "(" CNAME mult? "->" CNAME mult? ")" field_block? ";"
+field_block: "{" field_list "}"
+mult: "1" | "*"
+
+// Data operations
+insert_entity: "INSERT" CNAME "{" assign_list "}" alias_clause? ";"
+alias_clause: "AS" alias
+alias: CNAME
+assign_list: assign ("," assign)*
+assign: CNAME "=" literal_or_ref
+literal_or_ref: literal | alias_or_id
+literal: STRING | SIGNED_NUMBER | "TRUE" | "FALSE" | "NULL"
+
+connect_rel: "CONNECT" alias_or_id "-" CNAME "->" alias_or_id properties_block? ";"
+properties_block: "{" assign_list "}"
+
+update_stmt: "UPDATE" target_ref "SET" assign_list ";"
+delete_stmt: "DELETE" target_ref ";"
+target_ref: alias_or_id | pattern_ref
+pattern_ref: CNAME "{" condition "}"
+
+condition: prop_eq (condition_op prop_eq)*
+condition_op: "AND" | "OR"
+prop_eq: CNAME "=" literal
+
+// Queries
+query_stmt: "MATCH" pattern where_clause? return_clause? ";"
+where_clause: "WHERE" condition
+return_clause: "RETURN" return_list
+pattern: "(" node_pat ")" edge_node_sequence*
+edge_node_sequence: edge_pat "(" node_pat ")"
+node_pat: node_alias? CNAME node_condition?
+node_alias: alias ":"
+node_condition: "{" condition "}"
+edge_pat: "-" edge_spec direction
+edge_spec: "[" edge_type? edge_condition? "]"
+edge_type: ":" CNAME
+edge_condition: "{" condition "}"
+direction: "->" | "<-" | "-"
+return_list: return_item ("," return_item)*
+return_item: CNAME property_access?
+property_access: "." CNAME
+
+alias_or_id: alias | SIGNED_NUMBER

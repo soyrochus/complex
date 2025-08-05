@@ -1,8 +1,78 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "complex"
 version = "0.1.0"
-description = "A DSL for Data-Entity and Relationship Definition & Management
-"
+description = "A DSL for Data-Entity and Relationship Definition & Management against PostgreSQL with Apache AGE"
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.8"
+dependencies = [
+    "psycopg2-binary>=2.9.0",
+    "lark>=1.1.0",
+    "python-dotenv>=1.0.0",
+    "click>=8.0.0",
+    "pydantic>=2.0.0",
+]
+keywords = ["dsl", "postgresql", "apache-age", "cypher", "graph", "database"]
+authors = [
+    {name = "Complex Library", email = "complex@example.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "pexpect>=4.8.0",
+]
+
+[project.scripts]
+complex = "complex.cli:main"
+
+[project.urls]
+"Homepage" = "https://github.com/soyrochus/complex"
+"Bug Reports" = "https://github.com/soyrochus/complex/issues"
+"Source" = "https://github.com/soyrochus/complex"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["complex*"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[tool.ruff]
+target-version = "py38"
+line-length = 88
+select = ["E", "F", "W", "C", "I", "N", "UP", "YTT", "ANN", "S", "BLE", "FBT", "B", "A", "COM", "C4", "DTZ", "T10", "EM", "EXE", "FA", "ISC", "ICN", "G", "INP", "PIE", "T20", "PYI", "PT", "Q", "RSE", "RET", "SLF", "SLOT", "SIM", "TID", "TCH", "INT", "ARG", "PTH", "TD", "FIX", "ERA", "PD", "PGH", "PL", "TRY", "FLY", "NPY", "AIR", "PERF", "FURB", "LOG", "RUF"]
+ignore = ["ANN101", "ANN102", "D", "COM812", "ISC001"]
+
+[tool.ruff.per-file-ignores]
+"tests/*" = ["S101", "ANN"]
+
+[tool.pytest.ini_options]
+testpaths = ["complex/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
