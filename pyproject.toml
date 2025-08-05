@@ -1,0 +1,8 @@
+[project]
+name = "complex"
+version = "0.1.0"
+description = "A DSL for Data-Entity and Relationship Definition & Management
+"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
