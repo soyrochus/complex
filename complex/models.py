@@ -51,7 +51,7 @@ class Literal(BaseModel):
 class Assignment(BaseModel):
     """Represents a field assignment."""
     field: str
-    value: Union[Literal, str, int]  # literal or alias/id
+    value: Union[Literal, str, int, List[Literal]]  # literal, alias/id, or array literal
 
 
 class InsertEntity(BaseModel):

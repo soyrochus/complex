@@ -3,6 +3,9 @@
 %import common.SIGNED_NUMBER
 %import common.WS
 %ignore WS
+%ignore COMMENT
+
+COMMENT: /--[^\r\n]*/ | /\/\/[^\r\n]*/
 
 start: statement+
 
@@ -15,7 +18,7 @@ statement: entity_def
          | query_stmt
 
 // Schema definitions
-entity_def: "ENTITY" CNAME "{" field_list "}" extends_clause? ";"
+entity_def: "ENTITY" CNAME extends_clause? "{" field_list "}" extends_clause? ";"
 extends_clause: "EXTENDS" CNAME
 field_list: field_decl ("," field_decl)*
 field_decl: CNAME ":" data_type
@@ -33,8 +36,10 @@ alias_clause: "AS" alias
 alias: CNAME
 assign_list: assign ("," assign)*
 assign: CNAME "=" literal_or_ref
-literal_or_ref: literal | alias_or_id
+literal_or_ref: literal | alias_or_id | array_literal
 literal: STRING | SIGNED_NUMBER | "TRUE" | "FALSE" | "NULL"
+array_literal: "[" literal_list? "]"
+literal_list: literal ("," literal)*
 
 connect_rel: "CONNECT" alias_or_id "-" CNAME "->" alias_or_id properties_block? ";"
 properties_block: "{" assign_list "}"
@@ -46,7 +51,9 @@ pattern_ref: CNAME "{" condition "}"
 
 condition: prop_eq (condition_op prop_eq)*
 condition_op: "AND" | "OR"
-prop_eq: CNAME "=" literal
+prop_eq: prop_ref comparison_op literal
+comparison_op: "=" | "!=" | "<" | "<=" | ">" | ">="
+prop_ref: CNAME ("." CNAME)?
 
 // Queries
 query_stmt: "MATCH" pattern where_clause? return_clause? ";"
@@ -58,7 +65,8 @@ node_pat: node_alias? CNAME node_condition?
 node_alias: alias ":"
 node_condition: "{" condition "}"
 edge_pat: "-" edge_spec direction
-edge_spec: "[" edge_type? edge_condition? "]"
+edge_spec: "[" (edge_alias_type | edge_type)? edge_condition? "]"
+edge_alias_type: CNAME ":" CNAME
 edge_type: ":" CNAME
 edge_condition: "{" condition "}"
 direction: "->" | "<-" | "-"

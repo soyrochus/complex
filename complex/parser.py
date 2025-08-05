@@ -5,7 +5,7 @@ Complex DSL scripts into Abstract Syntax Trees.
 """
 
 import os
-from typing import Any, Union, List, Optional
+from typing import Any, List, Union, Optional, Dict
 from pathlib import Path
 
 try:
@@ -362,10 +362,6 @@ class ComplexTransformer(Transformer):
         """Transform edge-node sequence."""
         return items  # Return both edge and node
 
-    def edge_spec(self, items: List[Any]) -> List[Any]:
-        """Transform edge specification."""
-        return items  # Pass through edge type and condition
-
     def edge_type(self, items: List[Any]) -> str:
         """Transform edge type."""
         return str(items[0]) if items else ""
@@ -389,6 +385,54 @@ class ComplexTransformer(Transformer):
         alias = str(items[0])
         prop = str(items[1]) if len(items) > 1 else None
         return ReturnItem(alias=alias, property=prop)
+
+    def extends_clause(self, items: List[Any]) -> str:
+        """Transform extends clause."""
+        return str(items[0]) if items else ""
+
+    def array_literal(self, items: List[Any]) -> List[Literal]:
+        """Transform array literal."""
+        return items[0] if items else []
+
+    def literal_list(self, items: List[Literal]) -> List[Literal]:
+        """Transform literal list."""
+        return items
+
+    def prop_ref(self, items: List[Any]) -> str:
+        """Transform property reference."""
+        if len(items) == 1:
+            return str(items[0])
+        else:
+            # alias.property format
+            return f"{items[0]}.{items[1]}"
+
+    def comparison_op(self, items: List[Any]) -> str:
+        """Transform comparison operator."""
+        if not items:
+            return "="  # default to equality
+        return str(items[0])
+
+    def edge_alias_type(self, items: List[Any]) -> Dict[str, str]:
+        """Transform edge alias and type."""
+        return {"alias": str(items[0]), "type": str(items[1])}
+
+    def edge_spec(self, items: List[Any]) -> Dict[str, Any]:
+        """Transform edge specification."""
+        result: Dict[str, Any] = {"alias": None, "type": None, "condition": None}
+        
+        for item in items:
+            if isinstance(item, dict) and "alias" in item:
+                # edge_alias_type result
+                result["alias"] = item["alias"]
+                result["type"] = item["type"]
+            elif isinstance(item, str):
+                # simple edge_type
+                result["type"] = item
+            else:
+                # condition
+                result["condition"] = item
+        
+        return result
 
 
 class ComplexParser:
