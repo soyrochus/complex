@@ -152,6 +152,11 @@ WHERE condition?
 RETURN return_list;
 ```
 
+The simplest query to get all nodes in the graph:
+```dsl
+MATCH (n) RETURN n;
+```
+
 ### Pattern Syntax
 
 Node patterns:
@@ -199,6 +204,24 @@ WHERE p.status = "Active" OR p.priority = "High"
 RETURN alias                    // Return entire entity
 RETURN alias.property           // Return specific property
 RETURN alias1.name, alias2.title // Multiple properties
+```
+
+### Graph Exploration Queries
+
+For exploring and understanding your graph data:
+
+```dsl
+// Get all nodes in the graph (useful for initial exploration)
+MATCH (n) RETURN n;
+
+// Get all nodes of a specific type
+MATCH (n:Employee) RETURN n;
+
+// Get all relationships between any nodes
+MATCH (a)-[r]->(b) RETURN a, r, b;
+
+// Count all nodes by type
+MATCH (n:Employee) RETURN COUNT(n);
 ```
 
 ## Data Types
@@ -282,6 +305,12 @@ CONNECT alice - MANAGES -> bob {
 ### Query Examples
 
 ```dsl
+// Get all nodes in the graph
+MATCH (n) RETURN n;
+
+// Get all nodes of a specific type
+MATCH (e:Employee) RETURN e;
+
 // Find all employees in Engineering
 MATCH (e:Employee)
 WHERE e.department = "Engineering"
@@ -345,6 +374,10 @@ INSERT Person { name = "Bob", age = 25 } AS bob;
 CONNECT alice - KNOWS -> bob;
 
 // 4. Query the data
+// Get all nodes
+MATCH (n) RETURN n;
+
+// Get specific relationships
 MATCH (p1:Person)-[:KNOWS]->(p2:Person)
 RETURN p1.name, p2.name;
 ```

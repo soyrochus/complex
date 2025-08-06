@@ -389,14 +389,37 @@ class ComplexTransformer(Transformer):
             return "bidirectional"  # default direction
         return str(items[0])
     
+    def where_clause(self, items: List[Any]) -> Any:
+        """Transform where clause."""
+        # The where_clause should contain a condition
+        return items[0] if items else None
+    
+    def return_clause(self, items: List[Any]) -> List[ReturnItem]:
+        """Transform return clause."""
+        # The return_clause should contain a return_list
+        return items[0] if items else []
+    
     def return_list(self, items: List[ReturnItem]) -> List[ReturnItem]:
         """Transform return list."""
         return items
     
+    def property_access(self, items: List[Any]) -> str:
+        """Transform property access."""
+        # Property access like .name
+        return str(items[0]) if items else ""
+    
     def return_item(self, items: List[Any]) -> ReturnItem:
         """Transform return item."""
         alias = str(items[0])
-        prop = str(items[1]) if len(items) > 1 else None
+        prop = None
+        if len(items) > 1:
+            # Handle property access
+            prop_item = items[1]
+            if isinstance(prop_item, str):
+                prop = prop_item
+            else:
+                # Convert Tree to string if needed
+                prop = str(prop_item) if hasattr(prop_item, 'children') else str(prop_item)
         return ReturnItem(alias=alias, property=prop)
 
     def extends_clause(self, items: List[Any]) -> str:

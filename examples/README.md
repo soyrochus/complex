@@ -59,6 +59,7 @@ The examples model a software development organization with:
 - WHERE clauses with multiple conditions
 - RETURN projections with specific fields
 - Complex multi-hop relationship traversals
+- Graph exploration queries (`MATCH (n) RETURN n;` to get all nodes)
 
 ## Environment Setup
 
@@ -82,3 +83,21 @@ complex repl
 ```
 
 Then copy and paste statements from the example files to see immediate results.
+
+### Quick Start Queries
+
+After running the schema and data examples, try these exploration queries:
+
+```bash
+# Get all nodes in the graph
+MATCH (n) RETURN n;
+
+# Get all employees
+MATCH (e:Employee) RETURN e;
+
+# Get all relationships
+MATCH (a)-[r]->(b) RETURN a, r, b;
+
+# Find specific employees
+MATCH (e:Employee) WHERE e.department = "Engineering" RETURN e.name;
+```

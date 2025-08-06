@@ -1,6 +1,9 @@
 // Sample queries for the Complex DSL
 // Run schema.dsl and data.dsl first before running this file
 
+// Query 0: Get all nodes in the graph (useful for exploration)
+MATCH (n) RETURN n;
+
 // Query 1: Find all employees in Engineering department
 MATCH (e:Employee)
 WHERE e.department = "Engineering"

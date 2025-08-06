@@ -71,7 +71,7 @@ ignore = ["ANN101", "ANN102", "D", "COM812", "ISC001"]
 "tests/*" = ["S101", "ANN"]
 
 [tool.pytest.ini_options]
-testpaths = ["complex/tests"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
