@@ -66,7 +66,12 @@ Before running the examples, ensure you have:
 
 1. PostgreSQL with Apache AGE extension installed
 2. Environment variables configured (see main README.md)
-3. Complex DSL library installed: `pip install complex`
+3. Complex DSL library installed using `uv`:
+
+```bash
+# Install dependencies and sync the environment
+uv sync
+```
 
 ## Interactive Exploration
 
