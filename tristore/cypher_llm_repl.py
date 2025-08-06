@@ -1,16 +1,18 @@
-import os
 import argparse
+import os
 import re
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
+from typing import Optional
+
 from dotenv import load_dotenv
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Load .env if present
 load_dotenv()
@@ -131,6 +133,11 @@ def format_rows(rows):
 def print_result(rows):
     print(format_rows(rows))
 
+
+def log_print(prefix: str, text: str) -> None:
+    for line in text.splitlines():
+        print(f"[{prefix}] {line}")
+
 def execute_cypher(cur, conn, query):
     """Execute a Cypher query and return success status"""
     success, result = execute_cypher_with_smart_columns(cur, conn, query)
@@ -201,14 +208,32 @@ def main():
         except OSError as e:
             print(f"Error reading system prompt file: {e}")
 
+    log_enabled = False
+    llm_enabled = True
+
+    def parse_toggle(value: str) -> Optional[bool]:
+        val = value.lower()
+        if val in {"on", "true"}:
+            return True
+        if val in {"off", "false"}:
+            return False
+        return None
+
     def build_send_cypher():
         @tool
         def send_cypher(query: str) -> str:
             """Execute a Cypher query against the AGE/PostgreSQL database."""
+            if log_enabled:
+                log_print("TOOL", query)
             success, result = execute_cypher_with_smart_columns(cur, conn, query)
             if success:
-                return format_rows(result)
+                formatted = format_rows(result)
+                if log_enabled:
+                    log_print("DB", formatted)
+                return formatted
             else:
+                if log_enabled:
+                    log_print("DB", result)
                 return result  # result contains the error message
 
         return send_cypher
@@ -245,7 +270,7 @@ def main():
         # Start REPL (either after file execution or if no files provided)
         if not args.files:
             print("Enter adds a new line. Esc+Enter executes your Cypher query.")
-        print("Type \\q to quit.\n")
+        print("Use Ctrl+D or \\q to quit. \\h for list of commands.\n")
 
         session = PromptSession(
             history=FileHistory(HISTORY_FILE),
@@ -256,21 +281,81 @@ def main():
         while True:
             try:
                 text = session.prompt("cypher> ")
-                if text.strip() == "\\q":
-                    break
-                if not text.strip():
+                stripped = text.strip()
+                if not stripped:
                     continue
-                result = agent_executor.invoke(
-                    {"input": text, "chat_history": chat_history}
-                )
-                output = result.get("output", "")
-                if output:
-                    print(output)
-                chat_history.extend(
-                    [HumanMessage(content=text), AIMessage(content=output)]
-                )
+                if stripped == "\\q":
+                    break
+                if stripped == "\\h":
+                    print("Available commands:")
+                    print("  \\q              Quit the REPL")
+                    print(
+                        "  \\log [on|off]   Toggle logging of LLM and DB interactions"
+                    )
+                    print(
+                        "  \\llm [on|off]   Toggle LLM usage (off executes Cypher directly)"
+                    )
+                    print("  \\h              Show this help message")
+                    continue
+                if stripped.startswith("\\log"):
+                    parts = stripped.split(maxsplit=1)
+                    if len(parts) == 2:
+                        val = parse_toggle(parts[1])
+                        if val is None:
+                            print("Usage: \\log [on|off|true|false]")
+                        else:
+                            log_enabled = val
+                            state = "enabled" if log_enabled else "disabled"
+                            print(f"Logging {state}.")
+                    else:
+                        print("Usage: \\log [on|off|true|false]")
+                    continue
+                if stripped.startswith("\\llm"):
+                    parts = stripped.split(maxsplit=1)
+                    if len(parts) == 2:
+                        val = parse_toggle(parts[1])
+                        if val is None:
+                            print("Usage: \\llm [on|off|true|false]")
+                        else:
+                            llm_enabled = val
+                            state = "enabled" if llm_enabled else "disabled"
+                            print(f"LLM {state}.")
+                    else:
+                        print("Usage: \\llm [on|off|true|false]")
+                    continue
+
+                if llm_enabled:
+                    result = agent_executor.invoke(
+                        {"input": text, "chat_history": chat_history}
+                    )
+                    output = result.get("output", "")
+                    if output:
+                        if log_enabled:
+                            log_print("LLM", output)
+                        else:
+                            print(output)
+                    chat_history.extend(
+                        [HumanMessage(content=text), AIMessage(content=output)]
+                    )
+                else:
+                    if log_enabled:
+                        log_print("TOOL", text)
+                    success, result = execute_cypher_with_smart_columns(
+                        cur, conn, text
+                    )
+                    if success:
+                        formatted = format_rows(result)
+                        if log_enabled:
+                            log_print("DB", formatted)
+                        else:
+                            print_result(result)
+                    else:
+                        if log_enabled:
+                            log_print("DB", result)
+                        else:
+                            print(result)
             except KeyboardInterrupt:
-                print("\n(Use Ctrl+D or \\q to quit.)")
+                print("\n(Use Ctrl+D or \\q to quit. \\h for list of commands)")
             except EOFError:
                 print("\nExiting REPL.")
                 break
