@@ -31,11 +31,24 @@ GRAPH_NAME = getenv("AGE_GRAPH", "demo")
 DEFAULT_COLS = "(result agtype)"
 HISTORY_FILE = os.path.expanduser("~/.cypher_repl_history")
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful assistant that can query a PostgreSQL database with AGE "
-    "extensions using Cypher. Use the send_cypher tool to run queries. "
-    "When returning multiple items in a query (like nodes and relationships), "
-    "use proper column names in the RETURN clause for better formatting. "
-    "For example: 'RETURN n as node, r as relationship, m as target' instead of just 'RETURN n, r, m'."
+    "You are a helpful assistant for querying PostgreSQL databases with Apache AGE "
+    "extensions using Cypher. You have access to a send_cypher tool for database queries.\n\n"
+    "IMPORTANT: Only use the send_cypher tool when you actually need to retrieve, create, "
+    "update, or delete data from the database. Do NOT use it for:\n"
+    "- Explaining Cypher syntax or concepts\n"
+    "- Providing examples of queries without executing them\n"
+    "- Answering general questions about graph databases\n"
+    "- Helping with query structure or optimization advice\n"
+    "- Explaining error messages or troubleshooting\n\n"
+    "Use the tool ONLY when the user explicitly asks you to:\n"
+    "- Execute a specific query\n"
+    "- Show/find/retrieve actual data from the database\n"
+    "- Create, update, or delete nodes/relationships\n"
+    "- Count or analyze existing data\n\n"
+    "When you do use the send_cypher tool and return multiple items in a query "
+    "(like nodes and relationships), use proper column names in the RETURN clause "
+    "for better formatting. For example: 'RETURN n as node, r as relationship, m as target' "
+    "instead of just 'RETURN n, r, m'."
 )
 
 OPENAI_API_KEY = getenv("OPENAI_API_KEY", None)
