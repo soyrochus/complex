@@ -313,9 +313,6 @@ All errors include detailed messages and, where applicable, source location info
 - **Database**: Thread-safe connection pooling with psycopg2
 - **CLI**: Click-based command interface with REPL support
 
-## License
-
-MIT License - see [LICENSE.txt](LICENSE.txt) for details.
 
 ## Contributing
 
@@ -330,3 +327,9 @@ MIT License - see [LICENSE.txt](LICENSE.txt) for details.
 - **Documentation**: [Full specification](AGENTS.md)
 - **Issues**: [GitHub Issues](https://github.com/soyrochus/complex/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/soyrochus/complex/discussions)
+
+## License and Copyright
+
+Copyright (c) 2025, Iwan van der Kleijn
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE.txt) file for details.

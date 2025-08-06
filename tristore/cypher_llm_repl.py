@@ -91,12 +91,65 @@ def parse_return_clause(query):
     
     return f"({', '.join(cols)})"
 
+def preprocess_cypher_query(query):
+    """
+    Preprocess a Cypher query to make it compatible with AGE.
+    Removes trailing semicolons which are not supported by AGE's cypher() function.
+    """
+    return query.strip().rstrip(';')
+
+def split_cypher_statements(query):
+    """
+    Split a query string into individual Cypher statements.
+    Returns a list of individual statements.
+    """
+    # Split by semicolons and filter out empty statements
+    statements = [stmt.strip() for stmt in query.split(';') if stmt.strip()]
+    return statements
+
 def execute_cypher_with_smart_columns(cur, conn, query):
     """Execute a Cypher query with intelligent column detection"""
+    # Split query into individual statements
+    statements = split_cypher_statements(query)
+    
+    if len(statements) == 0:
+        return True, []
+    
+    if len(statements) == 1:
+        # Single statement - execute normally
+        return execute_single_cypher_statement(cur, conn, statements[0])
+    
+    # Multiple statements - execute each one and collect results
+    all_results = []
+    for i, stmt in enumerate(statements):
+        print(f"\n--- Statement {i+1} ---")
+        success, result = execute_single_cypher_statement(cur, conn, stmt)
+        if not success:
+            return False, result  # Return error from first failed statement
+        
+        if result:  # Only add non-empty results
+            all_results.extend(result)
+        
+        # Print result for each statement
+        if result:
+            print_result(result)
+        else:
+            print("(no results)")
+    
+    return True, all_results
+
+def execute_single_cypher_statement(cur, conn, query):
+    """Execute a single Cypher statement with intelligent column detection"""
     try:
+        # Preprocess the query to remove trailing semicolons
+        clean_query = preprocess_cypher_query(query)
+        
+        if not clean_query:  # Empty query after preprocessing
+            return True, []
+        
         # First, try with intelligent column detection
-        col_def = parse_return_clause(query)
-        sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {query} $$) AS {col_def};"
+        col_def = parse_return_clause(clean_query)
+        sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {col_def};"
         
         try:
             cur.execute(sql)
@@ -107,7 +160,7 @@ def execute_cypher_with_smart_columns(cur, conn, query):
             # If smart columns fail, try with default
             if col_def != DEFAULT_COLS:
                 conn.rollback()
-                sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {query} $$) AS {DEFAULT_COLS};"
+                sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {DEFAULT_COLS};"
                 cur.execute(sql)
                 rows = cur.fetchall()
                 conn.commit()
@@ -232,9 +285,10 @@ def main():
                     log_print("DB", formatted)
                 return formatted
             else:
+                error_msg = str(result) if not isinstance(result, str) else result
                 if log_enabled:
-                    log_print("DB", result)
-                return result  # result contains the error message
+                    log_print("DB", error_msg)
+                return error_msg
 
         return send_cypher
 
@@ -350,10 +404,11 @@ def main():
                         else:
                             print_result(result)
                     else:
+                        error_msg = str(result) if not isinstance(result, str) else result
                         if log_enabled:
-                            log_print("DB", result)
+                            log_print("DB", error_msg)
                         else:
-                            print(result)
+                            print(error_msg)
             except KeyboardInterrupt:
                 print("\n(Use Ctrl+D or \\q to quit. \\h for list of commands)")
             except EOFError:

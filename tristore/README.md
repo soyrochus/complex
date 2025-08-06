@@ -224,3 +224,10 @@ print(cur.fetchall())
 * All components are **fully open-source**.  
 * To persist data, add a volume to the container.  
 * For production, tweak `postgresql.conf` (memory, WAL, etc.).
+
+
+## License and Copyright
+
+Copyright (c) 2025, Iwan van der Kleijn
+
+This project is licensed under the MIT License. See the [LICENSE](../LICENSE.txt) file for details.
