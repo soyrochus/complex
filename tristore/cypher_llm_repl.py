@@ -249,30 +249,42 @@ def main():
         "--system-prompt",
         help="Path to a file containing a system prompt for the LLM",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output (show stack traces on errors)",
+    )
 
     args = parser.parse_args()
 
     print(f"Cypher REPL for AGE/PostgreSQL - graph: {GRAPH_NAME}")
 
-    conn = psycopg2.connect(**DB_PARAMS)
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        conn = psycopg2.connect(**DB_PARAMS)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # Initialization block
-    for stmt in INIT_STATEMENTS:
-        try:
-            cur.execute(stmt)
-            conn.commit()
-        except Exception:
-            conn.rollback()
+        # Initialization block
+        for stmt in INIT_STATEMENTS:
+            try:
+                cur.execute(stmt)
+                conn.commit()
+            except Exception:
+                conn.rollback()
 
-    # Optional system prompt
-    system_prompt = DEFAULT_SYSTEM_PROMPT
-    if args.system_prompt:
-        try:
-            with open(args.system_prompt, "r", encoding="utf-8") as f:
-                system_prompt = f.read()
-        except OSError as e:
-            print(f"Error reading system prompt file: {e}")
+        # Optional system prompt
+        system_prompt = DEFAULT_SYSTEM_PROMPT
+        if args.system_prompt:
+            try:
+                with open(args.system_prompt, "r", encoding="utf-8") as f:
+                    system_prompt = f.read()
+            except OSError as e:
+                print(f"Error reading system prompt file: {e}")
+    except Exception as e:
+        if args.verbose:
+            raise
+        print(e)
+        return
 
     log_enabled = False
     llm_enabled = True
@@ -427,6 +439,10 @@ def main():
             except EOFError:
                 print("\nExiting REPL.")
                 break
+    except Exception as e:
+        if args.verbose:
+            raise
+        print(e)
     finally:
         cur.close()
         conn.close()
