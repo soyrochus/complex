@@ -8,7 +8,7 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 import psycopg2
@@ -54,6 +54,39 @@ DEFAULT_SYSTEM_PROMPT = (
 OPENAI_API_KEY = getenv("OPENAI_API_KEY", None)
 OPENAI_MODEL_NAME = getenv("OPENAI_MODEL_NAME", "gpt-4.1")
 OPENAI_TEMPERATURE = float(getenv("OPENAI_TEMPERATURE", "0"))
+
+# LLM Provider configuration
+LLM_PROVIDER = getenv("LLM_PROVIDER", "openai")
+
+# Azure OpenAI configuration
+AZURE_OPENAI_API_KEY = getenv("AZURE_OPENAI_API_KEY", None)
+AZURE_OPENAI_ENDPOINT = getenv("AZURE_OPENAI_ENDPOINT", None)
+AZURE_OPENAI_API_VERSION = getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+AZURE_OPENAI_DEPLOYMENT_NAME = getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
+
+def create_llm():
+    """Create and return the appropriate LLM instance based on provider configuration"""
+    if LLM_PROVIDER == "openai":
+        if not OPENAI_API_KEY:
+            raise ValueError("OpenAI API key is required when using 'openai' provider. Please set OPENAI_API_KEY environment variable.")
+        return ChatOpenAI(
+            model=OPENAI_MODEL_NAME,
+            temperature=OPENAI_TEMPERATURE,
+        )
+    elif LLM_PROVIDER == "azure_openai":
+        if not AZURE_OPENAI_API_KEY:
+            raise ValueError("Azure OpenAI API key is required when using 'azure_openai' provider. Please set AZURE_OPENAI_API_KEY environment variable.")
+        if not AZURE_OPENAI_ENDPOINT:
+            raise ValueError("Azure OpenAI endpoint is required when using 'azure_openai' provider. Please set AZURE_OPENAI_ENDPOINT environment variable.")
+        return AzureChatOpenAI(
+            api_key=AZURE_OPENAI_API_KEY,  # type: ignore
+            azure_deployment=AZURE_OPENAI_DEPLOYMENT_NAME,
+            api_version=AZURE_OPENAI_API_VERSION,
+            temperature=OPENAI_TEMPERATURE,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+        )
+    else:
+        raise ValueError(f"Unknown LLM provider: '{LLM_PROVIDER}'. Supported providers are 'openai' and 'azure_openai'.")
 
 INIT_STATEMENTS = [
     "CREATE EXTENSION IF NOT EXISTS age;",
@@ -260,10 +293,29 @@ def main():
 
     print(f"Cypher REPL for AGE/PostgreSQL - graph: {GRAPH_NAME}")
 
+    # Validate LLM provider configuration early
+    try:
+        create_llm()  # This will validate the configuration without creating the actual instance
+    except ValueError as e:
+        print(f"LLM Configuration Error: {e}")
+        return
+
     try:
         conn = psycopg2.connect(**DB_PARAMS)
         cur = conn.cursor(cursor_factory=RealDictCursor)
+    except psycopg2.OperationalError as e:
+        if args.verbose:
+            raise
+        print(f"Database connection failed: {e}")
+        print("Please ensure the PostgreSQL server is running and accessible.")
+        return
+    except Exception as e:
+        if args.verbose:
+            raise
+        print(f"Database error: {e}")
+        return
 
+    try:
         # Initialization block
         for stmt in INIT_STATEMENTS:
             try:
@@ -283,7 +335,7 @@ def main():
     except Exception as e:
         if args.verbose:
             raise
-        print(e)
+        print(f"Initialization error: {e}")
         return
 
     log_enabled = False
@@ -319,10 +371,7 @@ def main():
 
     def build_agent():
         send_cypher_tool = build_send_cypher()
-        llm = ChatOpenAI(
-            model=OPENAI_MODEL_NAME,
-            temperature=OPENAI_TEMPERATURE,
-        )
+        llm = create_llm()
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", system_prompt),
@@ -344,7 +393,15 @@ def main():
             print("\nExecution complete.")
             return
 
-        agent_executor = build_agent()
+        agent_executor = None
+        try:
+            agent_executor = build_agent()
+        except Exception as e:
+            if args.verbose:
+                raise
+            print(f"LLM initialization error: {e}")
+            print("Running in Cypher-only mode (LLM disabled)")
+            llm_enabled = False
 
         # Start REPL (either after file execution or if no files provided)
         if not args.files:
@@ -404,6 +461,9 @@ def main():
                     continue
 
                 if llm_enabled:
+                    if agent_executor is None:
+                        print("LLM is not available. Use \\llm off to disable LLM mode or check your configuration.")
+                        continue
                     result = agent_executor.invoke(
                         {"input": text, "chat_history": chat_history}
                     )
