@@ -99,9 +99,10 @@ class VerboseCallback(BaseCallbackHandler):
     def on_llm_start(self, serialized, prompts, **kwargs):  # type: ignore[override]
         try:
             for i, p in enumerate(prompts):
-                self.logger.debug("LLM OUT > prompt[%d]=%r", i, (p or '')[:1000])
+                # IN = data we send to LLM
+                self.logger.debug("LLM IN  > prompt[%d]=%r", i, (p or '')[:1000])
         except Exception:
-            self.logger.debug("LLM OUT > (unable to log prompts)")
+            self.logger.debug("LLM IN  > (unable to log prompts)")
 
     # LangChain passes (response, **kwargs)
     def on_llm_end(self, response, **kwargs):  # type: ignore[override]
@@ -109,24 +110,27 @@ class VerboseCallback(BaseCallbackHandler):
             gens = getattr(response, 'generations', None)
             if gens and gens[0] and hasattr(gens[0][0], 'text'):
                 gen_text = gens[0][0].text
-                self.logger.debug("LLM IN  < %r", (gen_text or '')[:1000])
+                # OUT = data coming back from LLM
+                self.logger.debug("LLM OUT < %r", (gen_text or '')[:1000])
             else:
-                self.logger.debug("LLM IN  < (no generations)")
+                self.logger.debug("LLM OUT < (no generations)")
         except Exception:
-            self.logger.debug("LLM IN  < (unparseable response)")
+            self.logger.debug("LLM OUT < (unparseable response)")
 
     # LangChain passes (serialized, input_str, **kwargs)
     def on_tool_start(self, serialized, input_str, **kwargs):  # type: ignore[override]
         try:
-            self.logger.debug("TOOL OUT > %s %r", getattr(serialized, 'get', lambda *_: 'tool')("name", "?"), (input_str or '')[:1000])
+            # IN = data we send into the tool
+            self.logger.debug("TOOL IN  > %s %r", getattr(serialized, 'get', lambda *_: 'tool')("name", "?"), (input_str or '')[:1000])
         except Exception:
-            self.logger.debug("TOOL OUT > (unparseable tool start)")
+            self.logger.debug("TOOL IN  > (unparseable tool start)")
 
     def on_tool_end(self, output, **kwargs):  # type: ignore[override]
         try:
-            self.logger.debug("TOOL IN  < %r", str(output)[:1000])
+            # OUT = data returned by the tool
+            self.logger.debug("TOOL OUT < %r", str(output)[:1000])
         except Exception:
-            self.logger.debug("TOOL IN  < (unparseable output)")
+            self.logger.debug("TOOL OUT < (unparseable output)")
 
 INIT_STATEMENTS = [
     "CREATE EXTENSION IF NOT EXISTS age;",
@@ -226,12 +230,14 @@ def execute_single_cypher_statement(cur, conn, query, logger: Optional[logging.L
         sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {col_def};"
         try:
             if logger:
-                logger.debug("DB OUT > %s", sql)
+                # IN = SQL we send to DB
+                logger.debug("DB IN  > %s", sql)
             cur.execute(sql)
             rows = cur.fetchall()
             conn.commit()
             if logger:
-                logger.debug("DB IN  < rows=%d sample=%r", len(rows), rows[:1] if rows else None)
+                # OUT = rows returned from DB
+                logger.debug("DB OUT < rows=%d sample=%r", len(rows), rows[:1] if rows else None)
             return True, rows
         except Exception:
             if col_def != DEFAULT_COLS:
@@ -240,12 +246,12 @@ def execute_single_cypher_statement(cur, conn, query, logger: Optional[logging.L
                 conn.rollback()
                 sql2 = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {DEFAULT_COLS};"
                 if logger:
-                    logger.debug("DB OUT > %s", sql2)
+                    logger.debug("DB IN  > %s", sql2)
                 cur.execute(sql2)
                 rows = cur.fetchall()
                 conn.commit()
                 if logger:
-                    logger.debug("DB IN  < rows=%d sample=%r", len(rows), rows[:1] if rows else None)
+                    logger.debug("DB OUT < rows=%d sample=%r", len(rows), rows[:1] if rows else None)
                 return True, rows
             raise
     except Exception as e:
