@@ -32,26 +32,29 @@ DB_PARAMS = {
 GRAPH_NAME = getenv("AGE_GRAPH", "demo")
 DEFAULT_COLS = "(result agtype)"
 HISTORY_FILE = os.path.expanduser("~/.cypher_repl_history")
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful assistant for querying PostgreSQL databases with Apache AGE "
-    "extensions using Cypher. You have access to a send_cypher tool for database queries.\n\n"
-    "IMPORTANT: Only use the send_cypher tool when you actually need to retrieve, create, "
-    "update, or delete data from the database. Do NOT use it for:\n"
-    "- Explaining Cypher syntax or concepts\n"
-    "- Providing examples of queries without executing them\n"
-    "- Answering general questions about graph databases\n"
-    "- Helping with query structure or optimization advice\n"
-    "- Explaining error messages or troubleshooting\n\n"
-    "Use the tool ONLY when the user explicitly asks you to:\n"
-    "- Execute a specific query\n"
-    "- Show/find/retrieve actual data from the database\n"
-    "- Create, update, or delete nodes/relationships\n"
-    "- Count or analyze existing data\n\n"
-    "When you do use the send_cypher tool and return multiple items in a query "
-    "(like nodes and relationships), use proper column names in the RETURN clause "
-    "for better formatting. For example: 'RETURN n as node, r as relationship, m as target' "
-    "instead of just 'RETURN n, r, m'."
-)
+
+# -------- Ultra-tight system prompt (pure Cypher, no SQL) --------
+DEFAULT_SYSTEM_PROMPT = """
+You are a Cypher agent for an AGE/PostgreSQL graph database. You have one tool: send_cypher(query).
+
+When to call the tool:
+- The user asks to show/run/find/create/update/delete data, or to count/filter/analyze data stored in the graph.
+
+When NOT to call the tool:
+- The user wants concepts, syntax help, or examples without execution — then answer in text only.
+
+Rules for tool usage:
+- Emit PURE CYPHER ONLY (no SQL wrapper, no graph name, no semicolons).
+  Example: MATCH (n) RETURN n AS node
+- Prefer clear aliases in RETURN when multiple items are returned.
+
+Examples:
+User: Show the first 5 nodes.
+Assistant: (call send_cypher with "MATCH (n) RETURN n AS node LIMIT 5")
+
+User: How do I count Person nodes?
+Assistant: Explain: "MATCH (p:Person) RETURN count(p) AS count" (no tool call).
+""".strip()
 
 OPENAI_API_KEY = getenv("OPENAI_API_KEY", None)
 OPENAI_MODEL_NAME = getenv("OPENAI_MODEL_NAME", "gpt-4.1")
@@ -95,39 +98,32 @@ class VerboseCallback(BaseCallbackHandler):
     def __init__(self, logger: logging.Logger):
         self.logger = logger
 
-    # LangChain passes (serialized, prompts, **kwargs)
     def on_llm_start(self, serialized, prompts, **kwargs):  # type: ignore[override]
         try:
             for i, p in enumerate(prompts):
-                # IN = data we send to LLM
                 self.logger.debug("LLM IN  > prompt[%d]=%r", i, (p or '')[:1000])
         except Exception:
             self.logger.debug("LLM IN  > (unable to log prompts)")
 
-    # LangChain passes (response, **kwargs)
     def on_llm_end(self, response, **kwargs):  # type: ignore[override]
         try:
             gens = getattr(response, 'generations', None)
             if gens and gens[0] and hasattr(gens[0][0], 'text'):
                 gen_text = gens[0][0].text
-                # OUT = data coming back from LLM
                 self.logger.debug("LLM OUT < %r", (gen_text or '')[:1000])
             else:
                 self.logger.debug("LLM OUT < (no generations)")
         except Exception:
             self.logger.debug("LLM OUT < (unparseable response)")
 
-    # LangChain passes (serialized, input_str, **kwargs)
     def on_tool_start(self, serialized, input_str, **kwargs):  # type: ignore[override]
         try:
-            # IN = data we send into the tool
             self.logger.debug("TOOL IN  > %s %r", getattr(serialized, 'get', lambda *_: 'tool')("name", "?"), (input_str or '')[:1000])
         except Exception:
             self.logger.debug("TOOL IN  > (unparseable tool start)")
 
     def on_tool_end(self, output, **kwargs):  # type: ignore[override]
         try:
-            # OUT = data returned by the tool
             self.logger.debug("TOOL OUT < %r", str(output)[:1000])
         except Exception:
             self.logger.debug("TOOL OUT < (unparseable output)")
@@ -145,68 +141,64 @@ def parse_return_clause(query):
     Returns appropriate column definition string for AGE.
     """
     query = query.strip()
-    
-    # Look for RETURN clause (case insensitive)
     return_match = re.search(r'\bRETURN\s+(.+?)(?:\s+(?:ORDER|LIMIT|SKIP|UNION)|$)', query, re.IGNORECASE | re.DOTALL)
-    
     if not return_match:
-        # No RETURN clause, use default
         return DEFAULT_COLS
-    
     return_clause = return_match.group(1).strip()
-    
-    # Split by comma and analyze each item
     items = [item.strip() for item in return_clause.split(',')]
-    
     if len(items) == 1:
-        # Single item, use default
         return DEFAULT_COLS
-    
-    # Multiple items - create column definitions
     cols = []
     for i, item in enumerate(items):
-        # Check if item has an alias (AS keyword)
         alias_match = re.search(r'\s+AS\s+(\w+)', item, re.IGNORECASE)
         if alias_match:
             col_name = alias_match.group(1)
         else:
-            # Try to extract variable name or use default
             var_match = re.search(r'(\w+)', item)
-            if var_match:
-                col_name = var_match.group(1)
-            else:
-                col_name = f"col{i+1}"
-        
+            col_name = var_match.group(1) if var_match else f"col{i+1}"
         cols.append(f"{col_name} agtype")
-    
     return f"({', '.join(cols)})"
 
 def preprocess_cypher_query(query):
-    """
-    Preprocess a Cypher query to make it compatible with AGE.
-    Removes trailing semicolons which are not supported by AGE's cypher() function.
-    """
+    """Remove trailing semicolons not supported by AGE's cypher() function."""
     return query.strip().rstrip(';')
 
 def split_cypher_statements(query):
+    """Split a string into individual Cypher statements by semicolon."""
+    return [stmt.strip() for stmt in query.split(';') if stmt.strip()]
+
+# --- extra: sanitize LLM slips that return SQL wrappers; extract pure Cypher ---
+_SQL_WRAPPER_RE = re.compile(
+    r"SELECT\s+\*\s+FROM\s+cypher\([^$]*\$\$\s*(?P<cypher>.+?)\s*\$\$\)\s+AS\s*\([^)]+\);?",
+    re.IGNORECASE | re.DOTALL,
+)
+_CYPHER_FN_RE = re.compile(
+    r"cypher\([^$]*\$\$\s*(?P<cypher>.+?)\s*\$\$\)\s*;?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+def _sanitize_llm_query_maybe_wrapped(q: str) -> str:
     """
-    Split a query string into individual Cypher statements.
-    Returns a list of individual statements.
+    If the LLM mistakenly emits a SQL wrapper or cypher(...) call,
+    extract the inner pure Cypher. Otherwise return q unchanged.
     """
-    # Split by semicolons and filter out empty statements
-    statements = [stmt.strip() for stmt in query.split(';') if stmt.strip()]
-    return statements
+    s = q.strip()
+    m = _SQL_WRAPPER_RE.search(s)
+    if m:
+        return m.group("cypher").strip().rstrip(';')
+    m = _CYPHER_FN_RE.search(s)
+    if m:
+        return m.group("cypher").strip().rstrip(';')
+    # fallback: just strip trailing semicolon
+    return s.rstrip(';')
 
 def execute_cypher_with_smart_columns(cur, conn, query, logger: Optional[logging.Logger] = None):
     """Execute a Cypher query with intelligent column detection (optionally verbose)."""
     statements = split_cypher_statements(query)
-    # No statements
     if not statements:
         return True, []
-    # Single statement fast path
     if len(statements) == 1:
         return execute_single_cypher_statement(cur, conn, statements[0], logger)
-    # Multiple statements
     all_results = []
     for i, stmt in enumerate(statements, start=1):
         print(f"\n--- Statement {i} ---")
@@ -223,20 +215,19 @@ def execute_cypher_with_smart_columns(cur, conn, query, logger: Optional[logging
 def execute_single_cypher_statement(cur, conn, query, logger: Optional[logging.Logger] = None):
     """Execute a single Cypher statement with intelligent column detection."""
     try:
-        clean_query = preprocess_cypher_query(query)
+        # sanitize any accidental SQL wrapper from the LLM
+        clean_query = _sanitize_llm_query_maybe_wrapped(preprocess_cypher_query(query))
         if not clean_query:
             return True, []
         col_def = parse_return_clause(clean_query)
         sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {col_def};"
         try:
             if logger:
-                # IN = SQL we send to DB
                 logger.debug("DB IN  > %s", sql)
             cur.execute(sql)
             rows = cur.fetchall()
             conn.commit()
             if logger:
-                # OUT = rows returned from DB
                 logger.debug("DB OUT < rows=%d sample=%r", len(rows), rows[:1] if rows else None)
             return True, rows
         except Exception:
@@ -270,10 +261,8 @@ def format_rows(rows):
         lines.append("\t".join(str(row[k]) for k in keys))
     return "\n".join(lines)
 
-
 def print_result(rows):
     print(format_rows(rows))
-
 
 def log_print(prefix: str, text: str) -> None:
     for line in text.splitlines():
@@ -286,7 +275,7 @@ def execute_cypher(cur, conn, query, logger: Optional[logging.Logger] = None):
         print_result(result)
         return True
     else:
-        print(result)  # result contains the error message
+        print(result)
         return False
 
 def load_and_execute_files(cur, conn, files, logger: Optional[logging.Logger] = None):
@@ -296,15 +285,11 @@ def load_and_execute_files(cur, conn, files, logger: Optional[logging.Logger] = 
         try:
             with open(file_path, 'r') as f:
                 content = f.read()
-            
-            # Split on semicolons and execute each statement
             statements = [stmt.strip() for stmt in content.split(';') if stmt.strip()]
-            
             for i, stmt in enumerate(statements, 1):
                 print(f"\nStatement {i}:")
                 print(f"cypher> {stmt}")
                 execute_cypher(cur, conn, stmt, logger)
-                
         except FileNotFoundError:
             print(f"Error: File '{file_path}' not found")
         except Exception as e:
@@ -313,39 +298,16 @@ def load_and_execute_files(cur, conn, files, logger: Optional[logging.Logger] = 
 def main():
     parser = argparse.ArgumentParser(description="Cypher REPL for AGE/PostgreSQL")
     parser.add_argument("files", nargs="*", help="Cypher files to load and execute")
-    parser.add_argument(
-        "-e",
-        "--execute",
-        action="store_true",
-        help="Execute files and exit (do not start REPL)",
-    )
-    parser.add_argument(
-        "-s",
-        "--system-prompt",
-        help="Path to a file containing a system prompt for the LLM",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output (show stack traces on errors)",
-    )
-
+    parser.add_argument("-e", "--execute", action="store_true", help="Execute files and exit (do not start REPL)")
+    parser.add_argument("-s", "--system-prompt", help="Path to a file containing a system prompt for the LLM")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output (show stack traces on errors)")
     args = parser.parse_args()
 
-    # Configure logging based on verbosity. In non-verbose mode suppress 3rd-party INFO noise.
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
     else:
         logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
-        # Silence common noisy libraries explicitly (defensive; only if they exist)
-        for noisy in [
-            "openai",
-            "httpx",
-            "urllib3",
-            "langchain",
-            "langchain_openai",
-        ]:
+        for noisy in ["openai", "httpx", "urllib3", "langchain", "langchain_openai"]:
             logging.getLogger(noisy).setLevel(logging.WARNING)
     logger = logging.getLogger("cypher_llm_repl")
     if args.verbose:
@@ -355,7 +317,6 @@ def main():
 
     # Validate LLM provider configuration early
     try:
-        # Validation only (no callbacks yet)
         create_llm()
     except ValueError as e:
         print(f"LLM Configuration Error: {e}")
@@ -377,7 +338,6 @@ def main():
         return
 
     try:
-        # Initialization block
         for stmt in INIT_STATEMENTS:
             try:
                 cur.execute(stmt)
@@ -385,7 +345,6 @@ def main():
             except Exception:
                 conn.rollback()
 
-        # Optional system prompt
         system_prompt = DEFAULT_SYSTEM_PROMPT
         if args.system_prompt:
             try:
@@ -413,12 +372,30 @@ def main():
     def build_send_cypher():
         @tool
         def send_cypher(query: str) -> str:
-            """Execute a Cypher query against the AGE/PostgreSQL database."""
+            """
+            Execute a pure Cypher query on the AGE/PostgreSQL graph database and return results.
+
+            Args:
+                query: The full Cypher statement ONLY (no SQL wrapper, no graph name, no trailing semicolon).
+                       Examples:
+                         MATCH (n) RETURN n AS node
+                         MATCH (p:Person) RETURN count(p) AS count
+                         CREATE (:Person {name: 'Alice'})
+
+            Use this tool when the user asks to retrieve/create/update/delete graph data,
+            or to count/filter/analyze data stored in the graph.
+
+            Do NOT use this tool for conceptual questions or syntax explanations.
+
+            Returns:
+                A formatted text table of results, or an error message.
+            """
             if log_enabled:
                 log_print("TOOL", query)
-            # Use verbose logger for DB OUT/IN when available (even if LLM mode)
+            # sanitize in case the LLM accidentally emits SQL wrapper
+            cypher_only = _sanitize_llm_query_maybe_wrapped(query)
             success, result = execute_cypher_with_smart_columns(
-                cur, conn, query, logger if args.verbose else None
+                cur, conn, cypher_only, logger if args.verbose else None
             )
             if success:
                 formatted = format_rows(result)
@@ -433,26 +410,10 @@ def main():
 
         return send_cypher
 
-    def build_agent():
-        send_cypher_tool = build_send_cypher()
-        llm = create_llm()
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", system_prompt),
-                MessagesPlaceholder("chat_history"),
-                ("user", "{input}"),
-                MessagesPlaceholder("agent_scratchpad"),
-            ]
-        )
-        agent = create_tool_calling_agent(llm, [send_cypher_tool], prompt)
-        return AgentExecutor(agent=agent, tools=[send_cypher_tool])
-
     try:
-        # Execute files if provided
         if args.files:
             load_and_execute_files(cur, conn, args.files, logger if args.verbose else None)
 
-        # Exit if --execute flag is set
         if args.execute:
             print("\nExecution complete.")
             return
@@ -480,15 +441,11 @@ def main():
             print("Running in Cypher-only mode (LLM disabled)")
             llm_enabled = False
 
-        # Start REPL (either after file execution or if no files provided)
         if not args.files:
             print("Enter adds a new line. Esc+Enter executes your Cypher query.")
         print("Use Ctrl+D or \\q to quit. \\h for list of commands.\n")
 
-        session = PromptSession(
-            history=FileHistory(HISTORY_FILE),
-            multiline=True,
-        )
+        session = PromptSession(history=FileHistory(HISTORY_FILE), multiline=True)
 
         chat_history = []
         while True:
@@ -502,12 +459,8 @@ def main():
                 if stripped == "\\h":
                     print("Available commands:")
                     print("  \\q              Quit the REPL")
-                    print(
-                        "  \\log [on|off]   Toggle logging of LLM and DB interactions"
-                    )
-                    print(
-                        "  \\llm [on|off]   Toggle LLM usage (off executes Cypher directly)"
-                    )
+                    print("  \\log [on|off]   Toggle logging of LLM and DB interactions")
+                    print("  \\llm [on|off]   Toggle LLM usage (off executes Cypher directly)")
                     print("  \\h              Show this help message")
                     continue
                 if stripped.startswith("\\log"):
@@ -541,18 +494,14 @@ def main():
                     if agent_executor is None:
                         print("LLM is not available. Use \\llm off to disable LLM mode or check your configuration.")
                         continue
-                    result = agent_executor.invoke(
-                        {"input": text, "chat_history": chat_history}
-                    )
+                    result = agent_executor.invoke({"input": text, "chat_history": chat_history})
                     output = result.get("output", "")
                     if output:
                         if log_enabled:
                             log_print("LLM", output)
                         else:
                             print(output)
-                    chat_history.extend(
-                        [HumanMessage(content=text), AIMessage(content=output)]
-                    )
+                    chat_history.extend([HumanMessage(content=text), AIMessage(content=output)])
                 else:
                     if log_enabled:
                         log_print("TOOL", text)
@@ -584,4 +533,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
