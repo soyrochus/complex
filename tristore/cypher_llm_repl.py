@@ -1,12 +1,14 @@
 import argparse
 import os
 import re
-from typing import Optional
+import logging
+from typing import Optional, Any, List
 
 from dotenv import load_dotenv
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from prompt_toolkit import PromptSession
@@ -64,16 +66,16 @@ AZURE_OPENAI_ENDPOINT = getenv("AZURE_OPENAI_ENDPOINT", None)
 AZURE_OPENAI_API_VERSION = getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
 AZURE_OPENAI_DEPLOYMENT_NAME = getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
 
-def create_llm():
+def create_llm(callbacks=None):
     """Create and return the appropriate LLM instance based on provider configuration"""
+    common_kwargs: dict[str, Any] = {"temperature": OPENAI_TEMPERATURE}
+    if callbacks is not None:
+        common_kwargs["callbacks"] = callbacks
     if LLM_PROVIDER == "openai":
         if not OPENAI_API_KEY:
             raise ValueError("OpenAI API key is required when using 'openai' provider. Please set OPENAI_API_KEY environment variable.")
-        return ChatOpenAI(
-            model=OPENAI_MODEL_NAME,
-            temperature=OPENAI_TEMPERATURE,
-        )
-    elif LLM_PROVIDER == "azure_openai":
+        return ChatOpenAI(model=OPENAI_MODEL_NAME, **common_kwargs)
+    if LLM_PROVIDER == "azure_openai":
         if not AZURE_OPENAI_API_KEY:
             raise ValueError("Azure OpenAI API key is required when using 'azure_openai' provider. Please set AZURE_OPENAI_API_KEY environment variable.")
         if not AZURE_OPENAI_ENDPOINT:
@@ -82,11 +84,49 @@ def create_llm():
             api_key=AZURE_OPENAI_API_KEY,  # type: ignore
             azure_deployment=AZURE_OPENAI_DEPLOYMENT_NAME,
             api_version=AZURE_OPENAI_API_VERSION,
-            temperature=OPENAI_TEMPERATURE,
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            **common_kwargs,
         )
-    else:
-        raise ValueError(f"Unknown LLM provider: '{LLM_PROVIDER}'. Supported providers are 'openai' and 'azure_openai'.")
+    raise ValueError(f"Unknown LLM provider: '{LLM_PROVIDER}'. Supported providers are 'openai' and 'azure_openai'.")
+
+
+class VerboseCallback(BaseCallbackHandler):
+    """LangChain callback handler to expose detailed LLM & tool interactions when verbose."""
+    def __init__(self, logger: logging.Logger):
+        self.logger = logger
+
+    # LangChain passes (serialized, prompts, **kwargs)
+    def on_llm_start(self, serialized, prompts, **kwargs):  # type: ignore[override]
+        try:
+            for i, p in enumerate(prompts):
+                self.logger.debug("LLM OUT > prompt[%d]=%r", i, (p or '')[:1000])
+        except Exception:
+            self.logger.debug("LLM OUT > (unable to log prompts)")
+
+    # LangChain passes (response, **kwargs)
+    def on_llm_end(self, response, **kwargs):  # type: ignore[override]
+        try:
+            gens = getattr(response, 'generations', None)
+            if gens and gens[0] and hasattr(gens[0][0], 'text'):
+                gen_text = gens[0][0].text
+                self.logger.debug("LLM IN  < %r", (gen_text or '')[:1000])
+            else:
+                self.logger.debug("LLM IN  < (no generations)")
+        except Exception:
+            self.logger.debug("LLM IN  < (unparseable response)")
+
+    # LangChain passes (serialized, input_str, **kwargs)
+    def on_tool_start(self, serialized, input_str, **kwargs):  # type: ignore[override]
+        try:
+            self.logger.debug("TOOL OUT > %s %r", getattr(serialized, 'get', lambda *_: 'tool')("name", "?"), (input_str or '')[:1000])
+        except Exception:
+            self.logger.debug("TOOL OUT > (unparseable tool start)")
+
+    def on_tool_end(self, output, **kwargs):  # type: ignore[override]
+        try:
+            self.logger.debug("TOOL IN  < %r", str(output)[:1000])
+        except Exception:
+            self.logger.debug("TOOL IN  < (unparseable output)")
 
 INIT_STATEMENTS = [
     "CREATE EXTENSION IF NOT EXISTS age;",
@@ -153,70 +193,66 @@ def split_cypher_statements(query):
     statements = [stmt.strip() for stmt in query.split(';') if stmt.strip()]
     return statements
 
-def execute_cypher_with_smart_columns(cur, conn, query):
-    """Execute a Cypher query with intelligent column detection"""
-    # Split query into individual statements
+def execute_cypher_with_smart_columns(cur, conn, query, logger: Optional[logging.Logger] = None):
+    """Execute a Cypher query with intelligent column detection (optionally verbose)."""
     statements = split_cypher_statements(query)
-    
-    if len(statements) == 0:
+    # No statements
+    if not statements:
         return True, []
-    
+    # Single statement fast path
     if len(statements) == 1:
-        # Single statement - execute normally
-        return execute_single_cypher_statement(cur, conn, statements[0])
-    
-    # Multiple statements - execute each one and collect results
+        return execute_single_cypher_statement(cur, conn, statements[0], logger)
+    # Multiple statements
     all_results = []
-    for i, stmt in enumerate(statements):
-        print(f"\n--- Statement {i+1} ---")
-        success, result = execute_single_cypher_statement(cur, conn, stmt)
+    for i, stmt in enumerate(statements, start=1):
+        print(f"\n--- Statement {i} ---")
+        success, result = execute_single_cypher_statement(cur, conn, stmt, logger)
         if not success:
-            return False, result  # Return error from first failed statement
-        
-        if result:  # Only add non-empty results
-            all_results.extend(result)
-        
-        # Print result for each statement
+            return False, result
         if result:
+            all_results.extend(result)
             print_result(result)
         else:
             print("(no results)")
-    
     return True, all_results
 
-def execute_single_cypher_statement(cur, conn, query):
-    """Execute a single Cypher statement with intelligent column detection"""
+def execute_single_cypher_statement(cur, conn, query, logger: Optional[logging.Logger] = None):
+    """Execute a single Cypher statement with intelligent column detection."""
     try:
-        # Preprocess the query to remove trailing semicolons
         clean_query = preprocess_cypher_query(query)
-        
-        if not clean_query:  # Empty query after preprocessing
+        if not clean_query:
             return True, []
-        
-        # First, try with intelligent column detection
         col_def = parse_return_clause(clean_query)
         sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {col_def};"
-        
         try:
+            if logger:
+                logger.debug("DB OUT > %s", sql)
             cur.execute(sql)
             rows = cur.fetchall()
             conn.commit()
+            if logger:
+                logger.debug("DB IN  < rows=%d sample=%r", len(rows), rows[:1] if rows else None)
             return True, rows
-        except Exception as e:
-            # If smart columns fail, try with default
+        except Exception:
             if col_def != DEFAULT_COLS:
+                if logger:
+                    logger.debug("DB retry with default column definition")
                 conn.rollback()
-                sql = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {DEFAULT_COLS};"
-                cur.execute(sql)
+                sql2 = f"SELECT * FROM cypher('{GRAPH_NAME}', $$ {clean_query} $$) AS {DEFAULT_COLS};"
+                if logger:
+                    logger.debug("DB OUT > %s", sql2)
+                cur.execute(sql2)
                 rows = cur.fetchall()
                 conn.commit()
+                if logger:
+                    logger.debug("DB IN  < rows=%d sample=%r", len(rows), rows[:1] if rows else None)
                 return True, rows
-            else:
-                raise e
-                
+            raise
     except Exception as e:
         conn.rollback()
         msg = str(e).split('\n')[0]
+        if logger:
+            logger.exception("Cypher execution failed")
         return False, f"Cypher error: {msg}"
 
 def format_rows(rows):
@@ -237,9 +273,9 @@ def log_print(prefix: str, text: str) -> None:
     for line in text.splitlines():
         print(f"[{prefix}] {line}")
 
-def execute_cypher(cur, conn, query):
+def execute_cypher(cur, conn, query, logger: Optional[logging.Logger] = None):
     """Execute a Cypher query and return success status"""
-    success, result = execute_cypher_with_smart_columns(cur, conn, query)
+    success, result = execute_cypher_with_smart_columns(cur, conn, query, logger)
     if success:
         print_result(result)
         return True
@@ -247,7 +283,7 @@ def execute_cypher(cur, conn, query):
         print(result)  # result contains the error message
         return False
 
-def load_and_execute_files(cur, conn, files):
+def load_and_execute_files(cur, conn, files, logger: Optional[logging.Logger] = None):
     """Load and execute Cypher statements from files"""
     for file_path in files:
         print(f"\n--- Executing file: {file_path} ---")
@@ -261,7 +297,7 @@ def load_and_execute_files(cur, conn, files):
             for i, stmt in enumerate(statements, 1):
                 print(f"\nStatement {i}:")
                 print(f"cypher> {stmt}")
-                execute_cypher(cur, conn, stmt)
+                execute_cypher(cur, conn, stmt, logger)
                 
         except FileNotFoundError:
             print(f"Error: File '{file_path}' not found")
@@ -291,11 +327,30 @@ def main():
 
     args = parser.parse_args()
 
+    # Configure logging based on verbosity. In non-verbose mode suppress 3rd-party INFO noise.
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
+    else:
+        logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
+        # Silence common noisy libraries explicitly (defensive; only if they exist)
+        for noisy in [
+            "openai",
+            "httpx",
+            "urllib3",
+            "langchain",
+            "langchain_openai",
+        ]:
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+    logger = logging.getLogger("cypher_llm_repl")
+    if args.verbose:
+        logger.debug("Verbose logging enabled")
+
     print(f"Cypher REPL for AGE/PostgreSQL - graph: {GRAPH_NAME}")
 
     # Validate LLM provider configuration early
     try:
-        create_llm()  # This will validate the configuration without creating the actual instance
+        # Validation only (no callbacks yet)
+        create_llm()
     except ValueError as e:
         print(f"LLM Configuration Error: {e}")
         return
@@ -355,7 +410,10 @@ def main():
             """Execute a Cypher query against the AGE/PostgreSQL database."""
             if log_enabled:
                 log_print("TOOL", query)
-            success, result = execute_cypher_with_smart_columns(cur, conn, query)
+            # Use verbose logger for DB OUT/IN when available (even if LLM mode)
+            success, result = execute_cypher_with_smart_columns(
+                cur, conn, query, logger if args.verbose else None
+            )
             if success:
                 formatted = format_rows(result)
                 if log_enabled:
@@ -386,7 +444,7 @@ def main():
     try:
         # Execute files if provided
         if args.files:
-            load_and_execute_files(cur, conn, args.files)
+            load_and_execute_files(cur, conn, args.files, logger if args.verbose else None)
 
         # Exit if --execute flag is set
         if args.execute:
@@ -395,11 +453,24 @@ def main():
 
         agent_executor = None
         try:
-            agent_executor = build_agent()
+            callbacks = [VerboseCallback(logger)] if args.verbose else None
+            send_cypher_tool = build_send_cypher()
+            llm = create_llm(callbacks=callbacks)
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", system_prompt),
+                    MessagesPlaceholder("chat_history"),
+                    ("user", "{input}"),
+                    MessagesPlaceholder("agent_scratchpad"),
+                ]
+            )
+            agent = create_tool_calling_agent(llm, [send_cypher_tool], prompt)
+            agent_executor = AgentExecutor(agent=agent, tools=[send_cypher_tool])
         except Exception as e:
             if args.verbose:
-                raise
-            print(f"LLM initialization error: {e}")
+                logger.exception("LLM initialization error")
+            else:
+                print(f"LLM initialization error: {e}")
             print("Running in Cypher-only mode (LLM disabled)")
             llm_enabled = False
 
@@ -479,9 +550,7 @@ def main():
                 else:
                     if log_enabled:
                         log_print("TOOL", text)
-                    success, result = execute_cypher_with_smart_columns(
-                        cur, conn, text
-                    )
+                    success, result = execute_cypher_with_smart_columns(cur, conn, text, logger if args.verbose else None)
                     if success:
                         formatted = format_rows(result)
                         if log_enabled:
